@@ -1,6 +1,9 @@
 //! Named-pipe client for communicating with bridge64.exe / bridge32.exe.
 //! Uses persistent pipe connections — one HANDLE cached per pipe, reused
 //! across commands. Reconnects automatically if the pipe breaks.
+//!
+//! Command helpers return `Result<(), String>` so the CLI can surface the
+//! bridge's own error text (e.g. `OpenProcess: 拒绝访问`) to the user.
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -18,11 +21,18 @@ const PIPE_32: &str = r"\\.\pipe\OpenSpeedyBridge32";
 static P64: Mutex<Option<isize>> = Mutex::new(None);
 static P32: Mutex<Option<isize>> = Mutex::new(None);
 
-fn handle_val(h: HANDLE) -> isize { h.0 as isize }
-fn handle_from(v: isize) -> HANDLE { HANDLE(v as *mut std::ffi::c_void) }
+fn handle_val(h: HANDLE) -> isize {
+    h.0 as isize
+}
+fn handle_from(v: isize) -> HANDLE {
+    HANDLE(v as *mut std::ffi::c_void)
+}
 
 fn to_wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn open_pipe(name: &str) -> Option<HANDLE> {
@@ -44,8 +54,12 @@ fn open_pipe(name: &str) -> Option<HANDLE> {
     }
 }
 
-fn cache_for(pipe: &str) -> &Mutex<Option<isize>> {
-    if pipe == PIPE_32 { &P32 } else { &P64 }
+fn cache_for(pipe: &str) -> &'static Mutex<Option<isize>> {
+    if pipe == PIPE_32 {
+        &P32
+    } else {
+        &P64
+    }
 }
 
 /// Send one command over a persistent pipe connection. Returns the response
@@ -54,7 +68,7 @@ fn cache_for(pipe: &str) -> &Mutex<Option<isize>> {
 fn pipe_command(pipe: &str, cmd: &str) -> Option<String> {
     let cache = cache_for(pipe);
     // Recover from a poisoned lock — losing the cached handle only costs one
-    // reconnect, while panicking here would take down the whole app.
+    // reconnect, while panicking here would take down the whole process.
     let mut guard = match cache.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -75,7 +89,9 @@ fn pipe_command(pipe: &str, cmd: &str) -> Option<String> {
                     "bridge",
                     format!("{pipe}: connection dropped while running {cmd}, reconnecting"),
                 );
-                unsafe { let _ = CloseHandle(h); }
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
                 *guard = None;
             }
         }
@@ -87,7 +103,9 @@ fn pipe_command(pipe: &str, cmd: &str) -> Option<String> {
         None => {
             crate::applog::warn(
                 "bridge",
-                format!("{pipe}: cannot connect — bridge process is not running or refused the pipe"),
+                format!(
+                    "{pipe}: cannot connect — bridge process is not running or refused the pipe"
+                ),
             );
             return None;
         }
@@ -98,8 +116,13 @@ fn pipe_command(pipe: &str, cmd: &str) -> Option<String> {
             Some(resp)
         }
         Err(_) => {
-            unsafe { let _ = CloseHandle(h); }
-            crate::applog::warn("bridge", format!("{pipe}: {cmd} failed on a fresh connection"));
+            unsafe {
+                let _ = CloseHandle(h);
+            }
+            crate::applog::warn(
+                "bridge",
+                format!("{pipe}: {cmd} failed on a fresh connection"),
+            );
             None
         }
     }
@@ -110,88 +133,91 @@ fn send_recv(h: HANDLE, cmd: &str) -> Result<String, ()> {
     let msg = format!("{cmd}\n");
     let mut written = 0u32;
     let wr = unsafe { WriteFile(h, Some(msg.as_bytes()), Some(&mut written), None) };
-    if wr.is_err() { return Err(()); }
+    if wr.is_err() {
+        return Err(());
+    }
 
     let mut buf = [0u8; 256];
     let mut nread = 0u32;
     let rd = unsafe { ReadFile(h, Some(&mut buf), Some(&mut nread), None) };
-    if rd.is_err() || nread == 0 { return Err(()); }
+    if rd.is_err() || nread == 0 {
+        return Err(());
+    }
 
-    let resp = String::from_utf8_lossy(&buf[..nread as usize]).trim().to_string();
-    eprintln!("[bridge] {cmd} → {resp}");
+    let resp = String::from_utf8_lossy(&buf[..nread as usize])
+        .trim()
+        .to_string();
+    crate::applog::info("bridge", format!("{cmd} → {resp}"));
     Ok(resp)
+}
+
+/// Send a command and expect an `OK...` reply; bridge-reported `ERROR ...`
+/// text (or a dead pipe) becomes a readable `Err`.
+fn command(pipe: &str, cmd: &str) -> Result<String, String> {
+    match pipe_command(pipe, cmd) {
+        Some(resp) if resp.starts_with("OK") => Ok(resp),
+        Some(resp) => Err(resp.strip_prefix("ERROR ").unwrap_or(&resp).to_string()),
+        None => Err(format!("无法连接 {pipe}（bridge 进程未运行或拒绝连接）")),
+    }
 }
 
 /// Check if bridge64 is running and responsive.
 pub fn bridge64_health() -> bool {
-    pipe_command(PIPE_64, "GETSPEED").map(|r| r.starts_with("OK")).unwrap_or(false)
+    pipe_command(PIPE_64, "GETSPEED")
+        .map(|r| r.starts_with("OK"))
+        .unwrap_or(false)
 }
 
 /// Check if bridge32 is running and responsive.
 pub fn bridge32_health() -> bool {
-    pipe_command(PIPE_32, "GETSPEED").map(|r| r.starts_with("OK")).unwrap_or(false)
+    pipe_command(PIPE_32, "GETSPEED")
+        .map(|r| r.starts_with("OK"))
+        .unwrap_or(false)
 }
 
+// ── Speed ──
+
 /// Set speed factor via bridge64.
-pub fn bridge64_set_speed(factor: f64) -> bool {
-    pipe_command(PIPE_64, &format!("SETSPEED {factor}")).map(|r| r.starts_with("OK")).unwrap_or(false)
+pub fn bridge64_set_speed(factor: f64) -> Result<(), String> {
+    command(PIPE_64, &format!("SETSPEED {factor}")).map(|_| ())
 }
 
 /// Set speed factor via bridge32.
-pub fn bridge32_set_speed(factor: f64) -> bool {
-    pipe_command(PIPE_32, &format!("SETSPEED {factor}")).map(|r| r.starts_with("OK")).unwrap_or(false)
+pub fn bridge32_set_speed(factor: f64) -> Result<(), String> {
+    command(PIPE_32, &format!("SETSPEED {factor}")).map(|_| ())
 }
 
 /// Get speed factor from bridge64.
 pub fn bridge64_get_speed() -> Option<f64> {
-    pipe_command(PIPE_64, "GETSPEED").and_then(|r| r.strip_prefix("OK ").and_then(|s| s.parse().ok()))
+    pipe_command(PIPE_64, "GETSPEED")
+        .and_then(|r| r.strip_prefix("OK ").and_then(|s| s.parse().ok()))
 }
 
-// ── Per-arch inject / eject / enable / disable ──
-
-pub fn bridge64_inject(pid: u32) -> bool {
-    pipe_command(PIPE_64, &format!("INJECT {pid}")).map(|r| r == "OK").unwrap_or(false)
-}
-pub fn bridge32_inject(pid: u32) -> bool {
-    pipe_command(PIPE_32, &format!("INJECT {pid}")).map(|r| r == "OK").unwrap_or(false)
+/// Get speed factor from bridge32.
+pub fn bridge32_get_speed() -> Option<f64> {
+    pipe_command(PIPE_32, "GETSPEED")
+        .and_then(|r| r.strip_prefix("OK ").and_then(|s| s.parse().ok()))
 }
 
-#[allow(dead_code)]
-pub fn bridge64_eject(pid: u32) -> bool {
-    pipe_command(PIPE_64, &format!("EJECT {pid}")).map(|r| r == "OK").unwrap_or(false)
+// ── Per-arch inject / enable / disable ──
+
+pub fn bridge64_inject(pid: u32) -> Result<(), String> {
+    command(PIPE_64, &format!("INJECT {pid}")).map(|_| ())
 }
-#[allow(dead_code)]
-pub fn bridge32_eject(pid: u32) -> bool {
-    pipe_command(PIPE_32, &format!("EJECT {pid}")).map(|r| r == "OK").unwrap_or(false)
+pub fn bridge32_inject(pid: u32) -> Result<(), String> {
+    command(PIPE_32, &format!("INJECT {pid}")).map(|_| ())
 }
 
-pub fn bridge64_enable(pid: u32) -> bool {
-    pipe_command(PIPE_64, &format!("ENABLE {pid}")).map(|r| r == "OK").unwrap_or(false)
+pub fn bridge64_enable(pid: u32) -> Result<(), String> {
+    command(PIPE_64, &format!("ENABLE {pid}")).map(|_| ())
 }
-pub fn bridge32_enable(pid: u32) -> bool {
-    pipe_command(PIPE_32, &format!("ENABLE {pid}")).map(|r| r == "OK").unwrap_or(false)
-}
-
-pub fn bridge64_disable(pid: u32) -> bool {
-    pipe_command(PIPE_64, &format!("DISABLE {pid}")).map(|r| r == "OK").unwrap_or(false)
-}
-pub fn bridge32_disable(pid: u32) -> bool {
-    pipe_command(PIPE_32, &format!("DISABLE {pid}")).map(|r| r == "OK").unwrap_or(false)
+pub fn bridge32_enable(pid: u32) -> Result<(), String> {
+    command(PIPE_32, &format!("ENABLE {pid}")).map(|_| ())
 }
 
-/// Query per-PID status from bridge.
-/// Returns Some(true) = injected + enabled, Some(false) = injected + disabled, None = not found / error.
-pub fn bridge64_get_status(pid: u32) -> Option<bool> {
-    match pipe_command(PIPE_64, &format!("STATUS {pid}"))?.as_str() {
-        "OK ENABLED" => Some(true),
-        "OK DISABLED" => Some(false),
-        _ => None,
-    }
+pub fn bridge64_disable(pid: u32) -> Result<(), String> {
+    command(PIPE_64, &format!("DISABLE {pid}")).map(|_| ())
 }
-pub fn bridge32_get_status(pid: u32) -> Option<bool> {
-    match pipe_command(PIPE_32, &format!("STATUS {pid}"))?.as_str() {
-        "OK ENABLED" => Some(true),
-        "OK DISABLED" => Some(false),
-        _ => None,
-    }
+pub fn bridge32_disable(pid: u32) -> Result<(), String> {
+    command(PIPE_32, &format!("DISABLE {pid}")).map(|_| ())
 }

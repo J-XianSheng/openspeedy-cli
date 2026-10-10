@@ -6,25 +6,14 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch: [x64]
 
     outputs:
       version: ${{ steps.version.outputs.version }}
-      msi-artifact-id: ${{ steps.upload-unsigned-msi.outputs.artifact-id }}
       portable-artifact-id: ${{ steps.upload-unsigned-portable.outputs.artifact-id }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Setup Rust targets
         run: rustup target add i686-pc-windows-msvc
@@ -39,75 +28,23 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      - name: Install frontend dependencies
-        run: npm ci
-
       - name: Get version
         id: version
         run: |
-          $ver = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $ver = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
           echo "version=$ver" >> $env:GITHUB_OUTPUT
 
-      - name: Build
-        run: npx tauri build
-
-      - name: Upload unsigned MSI
-        id: upload-unsigned-msi
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenSpeedy-${{ steps.version.outputs.version }}-msi-unsigned
-          path: src-tauri/target/release/bundle/msi/*.msi
+      - name: Build (CLI)
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
 
       - name: Upload unsigned portable
         id: upload-unsigned-portable
         uses: actions/upload-artifact@v4
         with:
-          name: OpenSpeedy-${{ steps.version.outputs.version }}-portable-unsigned
+          name: OpenSpeedy-${{ steps.version.outputs.version }}-cli-unsigned
           path: |
             src-tauri/target/release/openspeedy.exe
             src-tauri/target/release/bridge32.exe
             src-tauri/target/release/bridge64.exe
             src-tauri/target/release/speedpatch32.dll
             src-tauri/target/release/speedpatch64.dll
-
-  sign:
-    needs: build
-    runs-on: windows-latest
-    environment: production
-
-    steps:
-      - name: SignPath signing (MSI)
-        uses: signpath/github-action-submit-signing-request@v1.1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: '58b9835d-38ea-4898-a564-76610c01cecd'
-          project-slug: OpenSpeedy
-          signing-policy-slug: release-signing
-          github-artifact-id: ${{ needs.build.outputs.msi-artifact-id }}
-          artifact-configuration-slug: msi
-          wait-for-completion: true
-          output-artifact-directory: signed-msi/
-
-      - name: SignPath signing (Portable)
-        uses: signpath/github-action-submit-signing-request@v1.1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: '58b9835d-38ea-4898-a564-76610c01cecd'
-          project-slug: OpenSpeedy
-          signing-policy-slug: release-signing
-          github-artifact-id: ${{ needs.build.outputs.portable-artifact-id }}
-          artifact-configuration-slug: zip
-          wait-for-completion: true
-          output-artifact-directory: signed-portable/
-
-      - name: Upload signed MSI
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenSpeedy-${{ needs.build.outputs.version }}-msi-signed
-          path: signed-msi/
-
-      - name: Upload signed portable
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenSpeedy-${{ needs.build.outputs.version }}-portable-signed
-          path: signed-portable/

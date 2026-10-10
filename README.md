@@ -6,7 +6,8 @@
 </p>
 
 <p align="center">
-  The Best Open-Source Game Speed Controller
+  The Best Open-Source Game Speed Controller<br/>
+  <b>CLI edition</b> — no GUI, no WebView; drive everything from a terminal
 </p>
 
 <p align="center">
@@ -86,61 +87,73 @@
 
 # 🚀 Features
 - Quick speed adjustment
-- Modern UI
+- Command-line interface — no GUI / WebView / frontend build step
 - Supports both x86 and x64 platform processes
 - No kernel intrusion — Ring-3 level hooking, does not tamper with the system kernel
 
 
 # 💾 Installation
-📦 **Method 1: Winget**
+
+This fork is not distributed as a binary — build it from source:
 
 ``` powershell
-# Install command
-winget install openspeedy
-
-# Open a new terminal and run openspeedy
-openspeedy
+cargo build --release
 ```
 
-📥 **Method 2: Manual Download**
+The build copies every runtime file into `src-tauri\target\release\`:
 
-Visit the [Releases page](https://github.com/game1024/OpenSpeedy/releases) to download the latest version.
+| File | Role |
+|------|------|
+| `openspeedy.exe` | the CLI itself |
+| `bridge64.exe` / `bridge32.exe` | helper processes, spawned on demand |
+| `speedpatch64.dll` / `speedpatch32.dll` | time-API hook DLLs, injected into the game |
 
-
-🎮 **Method 3: Steam (Optional)**
-
-Get it on the [Steam store](https://store.steampowered.com/app/5010920/OpenSpeedy). This is an optional way to install.
-
+Copy those five files to any folder and run `openspeedy.exe help`.
 
 # 💻 System Requirements
 - OS: Windows 10 or later
 - Platform: x86 (32-bit) and x64 (64-bit)
+- Build prerequisites: [Rust](https://www.rust-lang.org/) · [CMake](https://cmake.org/) · [Visual Studio](https://visualstudio.microsoft.com/) (with C++ desktop development workload)
 
 
 # 📝 Usage
-1. Launch OpenSpeedy
-2. Run the target game you want to speed up
-<img src="https://github.com/user-attachments/assets/648e721d-9c3a-4d82-954c-19b16355d084" width="50%">
 
-3. Select the game process and adjust the speed multiplier in the OpenSpeedy interface
-<img src="https://github.com/user-attachments/assets/9cd56353-1906-44c5-ba29-b5b4d2db2b80" width="50%"/>
+``` powershell
+# 1. Find the target process (the filter matches name / PID / window title)
+openspeedy list game
 
-4. Takes effect immediately — see the comparison below
+# 2. Inject and enable speed patching (32/64-bit is detected automatically)
+openspeedy inject 1234
 
-<video src="https://github.com/user-attachments/assets/7c75e37d-bc7a-4639-89a0-a34a21676cba" width="70%"></video>
+# 3. Set the speed multiplier — takes effect immediately on every injected process
+openspeedy speed 2
+```
+
+| Command | Description |
+|---------|-------------|
+| `list [filter] [-a]` | List running processes |
+| `inject <PID\|name>` | Inject + enable speed patching |
+| `enable <PID\|name>` / `disable <PID\|name>` | Resume / pause speed |
+| `speed <factor>` | Set the multiplier (0.01 – 1000) |
+| `status [PID\|name]` | Show current multiplier / injection state |
+| `stop` | Terminate background bridge processes |
+
+The multiplier is saved to `%APPDATA%\OpenSpeedy\cli-state.json` and restored
+automatically on the next command (so `speed` before `inject` also works).
+Run `openspeedy help` for the full help text.
 
 # 🔧 How It Works
 
 Prerequisites:
-- [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/)
 - [CMake](https://cmake.org/)
 - [Visual Studio](https://visualstudio.microsoft.com/) (with C++ desktop development workload)
+- Optional, for 32-bit games: `rustup target add i686-pc-windows-msvc`
 
 Build command:
 
 ``` powershell
-npm run tauri dev
+cargo build --release
 ```
 
 OpenSpeedy adjusts game speed by hooking the following Windows system time functions:
@@ -183,9 +196,9 @@ OpenSpeedy is licensed under the [GPL v3](LICENSE) license.
 # 🙏 Acknowledgments
 OpenSpeedy uses source code from the following projects. Thanks to the open-source community! If OpenSpeedy helps you, a Star is welcome!
 - [minhook](https://github.com/TsudaKageyu/minhook): For API hooking
-- [tauri](https://tauri.app/): GUI framework
-- [MUI](https://mui.com/): UI component library
-- [Ant Design](https://ant.design/): UI splitter component
+
+(The upstream GUI build additionally uses Tauri, MUI and Ant Design; this
+command-line fork does not.)
 
 Disclaimer: OpenSpeedy is intended for educational and research purposes only. Users assume all risks and liabilities associated with the use of this software. The author is not responsible for any loss or legal liability arising from the use of this software.
 

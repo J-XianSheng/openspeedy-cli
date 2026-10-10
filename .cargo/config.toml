@@ -9,7 +9,7 @@
 # 注意：环境变量 RUSTFLAGS 的优先级高于本文件，CI 上不要设置它。
 #
 # Cargo 从当前工作目录向上查找本文件，所以仓库根这一份同时覆盖：
-#   - 仓库根执行的 `npx tauri build` / `cargo build`（CI 与本地）
+#   - 仓库根 / src-tauri 执行的 `cargo build`（CI 与本地）
 #   - src-tauri 里 build.rs 发起的嵌套 bridge 构建
 
 [target.x86_64-pc-windows-msvc]

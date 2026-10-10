@@ -3,35 +3,22 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use windows::core::PWSTR;
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
-    BITMAPINFOHEADER, DIB_RGB_COLORS,
-};
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW,
-    PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::{
-    GetModuleFileNameExW, GetModuleInformation, GetProcessMemoryInfo, EnumProcessModulesEx,
-    MODULEINFO, PROCESS_MEMORY_COUNTERS, LIST_MODULES_32BIT, LIST_MODULES_64BIT,
+    EnumProcessModulesEx, GetModuleFileNameExW, GetModuleInformation, GetProcessMemoryInfo,
+    LIST_MODULES_32BIT, LIST_MODULES_64BIT, MODULEINFO, PROCESS_MEMORY_COUNTERS,
 };
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::Threading::{
     IsWow64Process, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
 };
-use windows::Win32::Security::{
-    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
-};
-use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
-use windows::Win32::UI::Shell::{
-    SHGetFileInfoW, SHGetImageList, SHFILEINFOW, SHGFI_SYSICONINDEX, SHIL_JUMBO,
-};
-use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, DI_NORMAL,
+    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
 
 // ---------------------------------------------------------------------------
@@ -60,7 +47,14 @@ fn cache_get(pid: u32) -> Option<CachedInfo> {
     })
 }
 
-fn cache_set(pid: u32, arch: String, window_title: Option<String>, memory_kb: u64, exe_path: Option<String>, admin: bool) {
+fn cache_set(
+    pid: u32,
+    arch: String,
+    window_title: Option<String>,
+    memory_kb: u64,
+    exe_path: Option<String>,
+    admin: bool,
+) {
     if let Ok(mut cache) = cache().lock() {
         cache.insert(
             pid,
@@ -73,14 +67,6 @@ fn cache_set(pid: u32, arch: String, window_title: Option<String>, memory_kb: u6
             },
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Icon cache — stores extracted base64 BMP data URIs, keyed by PID
-// ---------------------------------------------------------------------------
-fn icon_cache() -> &'static Mutex<HashMap<u32, Option<String>>> {
-    static ICON_CACHE: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
-    ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +94,10 @@ pub struct ModuleInfo {
 fn to_wide(s: &str) -> Vec<u16> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -120,12 +109,11 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
     // Use EnumProcessModulesEx — handles cross-architecture (WOW64) correctly,
     // unlike CreateToolhelp32Snapshot which can only see modules matching the
     // caller's bitness.
-    let h_proc = match unsafe {
-        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
-    } {
-        Ok(h) => h,
-        Err(_) => return modules,
-    };
+    let h_proc =
+        match unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) } {
+            Ok(h) => h,
+            Err(_) => return modules,
+        };
 
     // Determine module filter flag: 32-bit or 64-bit modules
     let filter = {
@@ -149,12 +137,18 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
             ))
         };
         let is_wow64 = if let Some(f) = is_wow64_proc {
-            unsafe { let _ = f(h_proc, &mut wow64); }
+            unsafe {
+                let _ = f(h_proc, &mut wow64);
+            }
             wow64.as_bool()
         } else {
             false
         };
-        if is_wow64 { LIST_MODULES_32BIT } else { LIST_MODULES_64BIT }
+        if is_wow64 {
+            LIST_MODULES_32BIT
+        } else {
+            LIST_MODULES_64BIT
+        }
     };
 
     let mut h_mods: Vec<HMODULE> = vec![HMODULE::default(); 1024];
@@ -172,7 +166,9 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
     }
     .is_err()
     {
-        unsafe { let _ = CloseHandle(h_proc); }
+        unsafe {
+            let _ = CloseHandle(h_proc);
+        }
         return modules;
     }
 
@@ -181,10 +177,10 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
 
     for &h_mod in &h_mods {
         let mut name_buf = [0u16; 260];
-        let len = unsafe {
-            GetModuleFileNameExW(h_proc, h_mod, &mut name_buf)
-        };
-        if len == 0 { continue; }
+        let len = unsafe { GetModuleFileNameExW(h_proc, h_mod, &mut name_buf) };
+        if len == 0 {
+            continue;
+        }
         let name = String::from_utf16_lossy(&name_buf[..len as usize]);
         let base_name = std::path::Path::new(&name)
             .file_name()
@@ -192,7 +188,16 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
             .unwrap_or_default();
 
         let mut info = MODULEINFO::default();
-        if unsafe { GetModuleInformation(h_proc, h_mod, &mut info, std::mem::size_of::<MODULEINFO>() as u32) }.is_ok() {
+        if unsafe {
+            GetModuleInformation(
+                h_proc,
+                h_mod,
+                &mut info,
+                std::mem::size_of::<MODULEINFO>() as u32,
+            )
+        }
+        .is_ok()
+        {
             modules.push(ModuleInfo {
                 name: base_name,
                 path: name,
@@ -202,7 +207,9 @@ pub fn enumerate_modules(pid: u32) -> Vec<ModuleInfo> {
         }
     }
 
-    unsafe { let _ = CloseHandle(h_proc); }
+    unsafe {
+        let _ = CloseHandle(h_proc);
+    }
     modules
 }
 
@@ -301,7 +308,14 @@ pub fn enumerate_processes_full() -> Vec<ProcessInfo> {
                 let exe_path = get_exe_path(pid);
                 let admin = is_admin(pid);
 
-                cache_set(pid, arch.clone(), window_title.clone(), memory_kb, exe_path.clone(), admin);
+                cache_set(
+                    pid,
+                    arch.clone(),
+                    window_title.clone(),
+                    memory_kb,
+                    exe_path.clone(),
+                    admin,
+                );
 
                 processes.push(ProcessInfo {
                     pid,
@@ -326,37 +340,8 @@ pub fn enumerate_processes_full() -> Vec<ProcessInfo> {
     if let Ok(mut cache) = cache().lock() {
         cache.retain(|pid, _| live_pids.contains(pid));
     }
-    if let Ok(mut cache) = icon_cache().lock() {
-        cache.retain(|pid, _| live_pids.contains(pid));
-    }
 
     processes
-}
-
-// ---------------------------------------------------------------------------
-// Icon extraction
-// ---------------------------------------------------------------------------
-pub fn get_process_icon(pid: u32) -> Option<String> {
-    // Check icon cache first
-    if let Ok(cache) = icon_cache().lock() {
-        if let Some(entry) = cache.get(&pid) {
-            return entry.clone();
-        }
-    }
-
-    // Try cached exe_path first, fall back to querying it
-    let exe_path = cache_get(pid)
-        .and_then(|c| c.exe_path)
-        .or_else(|| get_exe_path(pid))?;
-
-    let icon = extract_icon_base64(&exe_path);
-
-    // Store in icon cache (even if None, so we don't retry failing PIDs)
-    if let Ok(mut cache) = icon_cache().lock() {
-        cache.insert(pid, icon.clone());
-    }
-
-    icon
 }
 
 // ---------------------------------------------------------------------------
@@ -386,161 +371,10 @@ fn get_exe_path(pid: u32) -> Option<String> {
     }
 }
 
-fn extract_icon_base64(exe_path: &str) -> Option<String> {
-    let exe_wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-    // Get the system image list icon index for this file
-    let mut sfi = SHFILEINFOW::default();
-    let result = unsafe {
-        SHGetFileInfoW(
-            windows::core::PCWSTR(exe_wide.as_ptr()),
-            FILE_FLAGS_AND_ATTRIBUTES::default(),
-            Some(&mut sfi),
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_SYSICONINDEX,
-        )
-    };
-
-    if result == 0 {
-        return None;
-    }
-
-    // Get the JUMBO (256x256) image list
-    let imagelist: IImageList = unsafe { SHGetImageList(SHIL_JUMBO as i32).ok()? };
-
-    // Extract the icon with ILD_TRANSPARENT (1) for alpha-aware result
-    let hicon = unsafe { imagelist.GetIcon(sfi.iIcon as i32, 1).ok()? };
-
-    if hicon.is_invalid() {
-        return None;
-    }
-
-    let icon_data = icon_to_png_data(hicon);
-    let _ = unsafe { DestroyIcon(hicon) };
-
-    icon_data
-}
-
-/// Render HICON to a 32bpp RGBA buffer via DrawIconEx (Windows handles mask/transparency),
-/// then encode as PNG data URI.
-fn icon_to_png_data(
-    hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
-) -> Option<String> {
-    const ICON_SIZE: i32 = 64;
-
-    // Create screen-compatible DC
-    let hdc_screen = unsafe { CreateCompatibleDC(None) };
-    if hdc_screen.is_invalid() {
-        return None;
-    }
-
-    // Create a 32bpp DIB section so we get alpha-aware pixels
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: ICON_SIZE,
-            biHeight: -ICON_SIZE, // negative = top-down DIB
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: 0, // BI_RGB
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [Default::default()],
-    };
-
-    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbm = unsafe {
-        CreateDIBSection(
-            hdc_screen,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            None,
-            0,
-        )
-    };
-
-    let hbm = match hbm {
-        Ok(h) if !h.is_invalid() => h,
-        _ => {
-            let _ = unsafe { DeleteDC(hdc_screen) };
-            return None;
-        }
-    };
-
-    // CreateDIBSection reports the pixel buffer through `bits`. A valid handle
-    // with a null pointer there would make the read-back below dereference
-    // address 0 — an access violation, which no panic hook can catch.
-    if bits.is_null() {
-        let _ = unsafe { DeleteObject(hbm) };
-        let _ = unsafe { DeleteDC(hdc_screen) };
-        return None;
-    }
-
-    // Select the DIB into the DC and draw the icon onto it
-    let old_bm = unsafe { SelectObject(hdc_screen, hbm) };
-    if old_bm.is_invalid() {
-        let _ = unsafe { DeleteObject(hbm) };
-        let _ = unsafe { DeleteDC(hdc_screen) };
-        return None;
-    }
-
-    let _ = unsafe {
-        DrawIconEx(
-            hdc_screen,
-            0,
-            0,
-            hicon,
-            ICON_SIZE,
-            ICON_SIZE,
-            0,
-            None,
-            DI_NORMAL,
-        )
-    };
-
-    // Read back pixels — DrawIconEx fills in proper alpha values
-    let pixel_count = (ICON_SIZE * ICON_SIZE) as usize;
-    let raw = unsafe { std::slice::from_raw_parts(bits as *const u8, pixel_count * 4) };
-
-    // Raw BGRA → RGBA for PNG encoder
-    let mut rgba = vec![0u8; pixel_count * 4];
-    for (i, chunk) in raw.chunks_exact(4).enumerate() {
-        rgba[i * 4] = chunk[2];     // R
-        rgba[i * 4 + 1] = chunk[1]; // G
-        rgba[i * 4 + 2] = chunk[0]; // B
-        rgba[i * 4 + 3] = chunk[3]; // A (set by DrawIconEx via mask)
-    }
-
-    // Cleanup GDI before encoding
-    let _ = unsafe { SelectObject(hdc_screen, old_bm) };
-    let _ = unsafe { DeleteObject(hbm) };
-    let _ = unsafe { DeleteDC(hdc_screen) };
-
-    // Encode PNG
-    let mut png_bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png_bytes, ICON_SIZE as u32, ICON_SIZE as u32);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        if let Ok(mut writer) = encoder.write_header() {
-            let _ = writer.write_image_data(&rgba);
-            writer.finish().ok()?;
-        } else {
-            return None;
-        }
-    }
-
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
-    Some(format!("data:image/png;base64,{}", b64))
-}
-
 fn is_admin(pid: u32) -> bool {
-    if pid == 0 { return false; }
+    if pid == 0 {
+        return false;
+    }
 
     // Try hardest first, fall back to limited (works on protected processes)
     let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) }

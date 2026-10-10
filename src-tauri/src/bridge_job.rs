@@ -22,11 +22,11 @@ use std::process::Child;
 use std::sync::OnceLock;
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE};
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-    JobObjectExtendedLimitInformation, SetInformationJobObject,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
 use crate::applog;
@@ -92,7 +92,10 @@ fn create_job() -> Option<JobHandle> {
             return None;
         }
 
-        applog::info("bridge", "cleanup job created — bridge processes will die with the app");
+        applog::info(
+            "bridge",
+            "cleanup job created — bridge processes will die with the app",
+        );
         Some(JobHandle(job))
     }
 }
@@ -111,10 +114,13 @@ pub fn assign(child: &Child, name: &str) -> bool {
     let process = HANDLE(child.as_raw_handle());
 
     if let Err(e) = unsafe { AssignProcessToJobObject(job, process) } {
-        applog::warn("bridge", format!(
+        applog::warn(
+            "bridge",
+            format!(
             "could not put {name} (pid {}) in the cleanup job ({e}) — it will survive a force-kill",
             child.id()
-        ));
+        ),
+        );
         return false;
     }
 
@@ -123,10 +129,19 @@ pub fn assign(child: &Child, name: &str) -> bool {
     // the only evidence available when diagnosing a machine we cannot reach.
     let mut member = BOOL::default();
     if unsafe { IsProcessInJob(process, job, &mut member) }.is_ok() && member.as_bool() {
-        applog::info("bridge", format!("{name} (pid {}) joined the cleanup job", child.id()));
+        applog::info(
+            "bridge",
+            format!("{name} (pid {}) joined the cleanup job", child.id()),
+        );
         true
     } else {
-        applog::warn("bridge", format!("{name} (pid {}) is not confirmed in the cleanup job", child.id()));
+        applog::warn(
+            "bridge",
+            format!(
+                "{name} (pid {}) is not confirmed in the cleanup job",
+                child.id()
+            ),
+        );
         false
     }
 }
@@ -154,6 +169,9 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
 
-        assert!(confirmed, "child was not confirmed as a member of the cleanup job");
+        assert!(
+            confirmed,
+            "child was not confirmed as a member of the cleanup job"
+        );
     }
 }

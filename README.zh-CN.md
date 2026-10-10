@@ -6,7 +6,8 @@
 </p>
 
 <p align="center">
-  最好用的开源游戏变速器
+  最好用的开源游戏变速器<br/>
+  <b>命令行版（CLI）</b> — 去掉 GUI 与 WebView 依赖，直接在终端里运行
 </p>
 
 <p align="center">
@@ -86,62 +87,72 @@
 
 # 🚀 特性
 - 快捷变速
-- 现代化UI
+- 命令行界面，无 GUI / WebView / 前端构建依赖
 - 同时可以支持x86和x64平台进程
 - 无内核侵入性，Ring3层Hook，不破坏系统内核
 
 
 # 💾 安装
-📦 **方式1: Winget**
+
+本 fork 不提供编译好的二进制包，请从源码构建：
 
 ``` powershell
-# 安装命令如下
-winget install openspeedy
-
-# 打开一个新的终端，运行openspeedy
-openspeedy
+cargo build --release
 ```
 
-📥 **方式2: 手动下载**
+构建会把全部运行时文件复制到 `src-tauri\target\release\`：
 
-访问 [安装页面](https://github.com/game1024/OpenSpeedy/releases) 下载最新版本
+| 文件 | 用途 |
+|------|------|
+| `openspeedy.exe` | 命令行主程序 |
+| `bridge64.exe` / `bridge32.exe` | 辅助进程（按需启动） |
+| `speedpatch64.dll` / `speedpatch32.dll` | 注入游戏的时间 API Hook DLL |
 
-
-🎮 **方式3: Steam（可选）**
-
-在 [Steam 商店](https://store.steampowered.com/app/5010920/OpenSpeedy) 获取，此为可选的安装方式。
-
+把这 5 个文件拷到任意目录，运行 `openspeedy.exe help` 即可。
 
 # 💻 操作系统要求
 - OS: Windows10 以上
 - 平台：x86（32位） 和 x64 （64位）
+- 编译环境：[Rust](https://www.rust-lang.org/) · [CMake](https://cmake.org/) · [Visual Studio](https://visualstudio.microsoft.com/)（含 C++ 桌面开发工作负载）
 
 
 # 📝 使用说明
-1. 启动 OpenSpeedy
-2. 运行需要变速的目标游戏
-<img src="https://github.com/user-attachments/assets/648e721d-9c3a-4d82-954c-19b16355d084" width="50%">
 
-3. 勾选游戏进程，在 OpenSpeedy 界面中调整速度倍率
-<img src="https://github.com/user-attachments/assets/9cd56353-1906-44c5-ba29-b5b4d2db2b80" width="50%"/>
+``` powershell
+# 1. 找到目标游戏进程（过滤词匹配 名称 / PID / 窗口标题）
+openspeedy list game
 
+# 2. 注入并启用变速（自动识别 32/64 位）
+openspeedy inject 1234
 
-4. 即刻生效，对比效果如下
+# 3. 设置速度倍率 —— 对所有已注入进程立即生效
+openspeedy speed 2
+```
 
-<video src="https://github.com/user-attachments/assets/7c75e37d-bc7a-4639-89a0-a34a21676cba" width="70%"></video>
+| 命令 | 说明 |
+|------|------|
+| `list [过滤词] [-a]` | 列出进程 |
+| `inject <PID\|名称>` | 注入并启用变速 |
+| `enable <PID\|名称>` / `disable <PID\|名称>` | 恢复 / 暂停变速 |
+| `speed <倍率>` | 设置倍率（0.01 – 1000） |
+| `status [PID\|名称]` | 查看当前倍率 / 注入状态 |
+| `stop` | 终止后台 bridge 进程 |
+
+倍率保存在 `%APPDATA%\OpenSpeedy\cli-state.json`，下次命令自动恢复（因此先
+`speed` 后 `inject` 也能直接生效）。完整帮助见 `openspeedy help`。
 
 # 🔧 技术原理
 
 编译环境要求：
-- [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/)
 - [CMake](https://cmake.org/)
 - [Visual Studio](https://visualstudio.microsoft.com/)（含 C++ 桌面开发工作负载）
+- 可选（支持 32 位游戏）：`rustup target add i686-pc-windows-msvc`
 
 编译命令：
 
 ``` powershell
-npm run tauri dev
+cargo build --release
 ```
 
 OpenSpeedy 通过 Hook 以下 Windows 系统时间函数来实现游戏速度调整：
@@ -184,9 +195,8 @@ OpenSpeedy 遵循 [GPL v3](LICENSE) 许可证。
 # 🙏 鸣谢
 OpenSpeedy使用到以下项目的源码，感谢开源社区的力量，如果OpenSpeedy对你有帮助，欢迎Star!
 - [minhook](https://github.com/TsudaKageyu/minhook): 用于API Hook
-- [tauri](https://tauri.app/): GUI
-- [MUI](https://mui.com/): UI 组件库
-- [Ant Design](https://ant.design/): UI 分割面板组件
+
+（上游 GUI 版本还使用 Tauri、MUI、Ant Design；本命令行版不再依赖它们。）
 
 免责声明: OpenSpeedy 仅用于教育和研究目的。用户应自行承担使用本软件的所有风险和责任。作者不对因使用本软件导致的任何损失或法律责任负责。
 

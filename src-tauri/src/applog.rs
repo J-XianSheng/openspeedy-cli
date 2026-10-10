@@ -57,7 +57,10 @@ fn timestamp() -> String {
 }
 
 fn thread_name() -> String {
-    std::thread::current().name().unwrap_or("unnamed").to_string()
+    std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_string()
 }
 
 /// Close the file handle so the log can be copied while the app is still
@@ -147,15 +150,26 @@ fn write_line(level: &str, phase: &str, msg: &str) {
     let _ = file.flush();
 
     // A single day of logs should not grow without bound either.
-    if file.metadata().map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
+    if file
+        .metadata()
+        .map(|m| m.len() > MAX_BYTES)
+        .unwrap_or(false)
+    {
         let path = log_path();
-        *guard = OpenOptions::new().create(true).write(true).truncate(true).open(path).ok();
+        *guard = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .ok();
     }
 }
 
 /// Delete log files older than `KEEP_DAYS` so the folder cannot grow forever.
 fn prune_old_files(dir: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
 
     // Stamp embedded in the file name, e.g. `openspeedy.20260912.log` → 20260912.
     let mut stamps: Vec<String> = entries
@@ -199,7 +213,11 @@ fn install_panic_hook() {
 
         write_line(
             "PANIC",
-            if std::thread::current().name() == Some("main") { "main-thread" } else { "thread" },
+            if std::thread::current().name() == Some("main") {
+                "main-thread"
+            } else {
+                "thread"
+            },
             &format!("{payload} | at {location} | GetLastError={last_error}"),
         );
         // Keep the log readable while the app is still crashed-but-alive.
@@ -211,7 +229,9 @@ fn install_panic_hook() {
 
 fn is_elevated() -> bool {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     unsafe {
@@ -234,50 +254,73 @@ fn is_elevated() -> bool {
     }
 }
 
-/// Version of the installed WebView2 runtime, read from the per-machine and
-/// per-user registry keys. `None` means the runtime is missing or damaged — the
-/// most common reason a Tauri app dies during launch.
-fn webview2_version() -> Option<String> {
-    use windows::core::w;
-    use windows::Win32::Foundation::{ERROR_SUCCESS, MAX_PATH};
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
-        HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
-    };
+/// OS name for the startup banner — the condensed form, without the build
+/// number.
+fn os_name_for_log() -> String {
+    os_version()
+        .split(' ')
+        .next()
+        .unwrap_or("Windows")
+        .to_string()
+}
 
-    const CLIENTS: [HKEY; 2] = [
-        HKEY_LOCAL_MACHINE,
-        HKEY_CURRENT_USER,
-    ];
-    let subkey = w!(r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
+fn os_version() -> String {
+    use windows::Win32::System::SystemInformation::{GetVersionExW, OSVERSIONINFOW};
 
-    let mut version = None;
-    for root in CLIENTS {
-        let mut key = HKEY::default();
-        let opened = unsafe { RegOpenKeyExW(root, subkey, 0, KEY_READ, &mut key) };
-        if opened != ERROR_SUCCESS {
-            continue;
-        }
-        let mut buf = [0u16; MAX_PATH as usize];
-        let mut size = std::mem::size_of_val(&buf) as u32;
-        let mut kind = REG_SZ;
-        let queried = unsafe {
-            RegQueryValueExW(
-                key,
-                w!("pv"),
-                None,
-                Some(&mut kind as *mut _),
-                Some(buf.as_mut_ptr() as *mut u8),
-                Some(&mut size),
-            )
-        };
-        let _ = unsafe { RegCloseKey(key) };
-        if queried == ERROR_SUCCESS {
-            version = Some(String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]));
-            break;
-        }
-    }
-    version
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            // RtlGetVersion always returns the real OS version (GetVersionExW can lie)
+            let ntdll = unsafe {
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(
+                    windows::core::PCWSTR::from_raw(to_wide("ntdll.dll").as_ptr()),
+                )
+            };
+            let rtl_get_version: Option<unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32> =
+                ntdll
+                    .ok()
+                    .and_then(|h| unsafe {
+                        windows::Win32::System::LibraryLoader::GetProcAddress(
+                            h,
+                            windows::core::s!("RtlGetVersion"),
+                        )
+                    })
+                    .map(|p| unsafe { std::mem::transmute(p) });
+
+            let mut vi = OSVERSIONINFOW {
+                dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+                ..Default::default()
+            };
+
+            let ok = if let Some(f) = rtl_get_version {
+                unsafe { f(&mut vi) == 0 } // STATUS_SUCCESS
+            } else {
+                unsafe { GetVersionExW(&mut vi) }.is_ok()
+            };
+
+            if ok {
+                let name = match (vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber) {
+                    (10, 0, b) if b >= 22000 => "Windows 11",
+                    (10, 0, _) => "Windows 10",
+                    (6, 3, _) => "Windows 8.1",
+                    (6, 2, _) => "Windows 8",
+                    (6, 1, _) => "Windows 7",
+                    _ => "Windows",
+                };
+                format!("{name} ({})", vi.dwBuildNumber)
+            } else {
+                String::from("Windows")
+            }
+        })
+        .clone()
+}
+
+fn to_wide(s: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 /// Absolute path of the log file, for the "reveal in Explorer" action.
@@ -303,29 +346,10 @@ pub fn info_context(phase: &str, context: &str, detail: impl std::fmt::Display) 
     info(phase, format!("{context}={detail}"));
 }
 
-/// Blocking native error box for fatal startup failures. Without it the process
-/// would vanish with no console, which is exactly the silent crash users
-/// report. Skipped in debug builds so `cargo tauri dev` does not hang on it.
-pub fn fatal_dialog(message: &str) {
-    if cfg!(debug_assertions) {
-        eprintln!("[fatal] {message}");
-        return;
-    }
-
-    use windows::core::HSTRING;
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-
-    let text = HSTRING::from(message);
-    let caption = HSTRING::from("OpenSpeedy");
-    unsafe {
-        MessageBoxW(None, &text, &caption, MB_OK | MB_ICONERROR);
-    }
-}
-
 /// Pick the log folder: `logs` next to the executable (keeps the logs with the
-/// app), falling back to `%LOCALAPPDATA%\OpenSpeedy\logs` when the install
-/// directory is not writable — an MSI install under `Program Files` denies
-/// writes to a standard user.
+/// tool), falling back to `%LOCALAPPDATA%\OpenSpeedy\logs` when that directory
+/// is not writable — an install under `Program Files` denies writes to a
+/// standard user.
 fn resolve_log_dir() -> PathBuf {
     let beside_exe = install_dir().join(LOG_DIR_NAME);
     if std::fs::create_dir_all(&beside_exe).is_ok()
@@ -359,16 +383,29 @@ pub fn init() {
 
     install_panic_hook();
 
-    info("app", format!("--- OpenSpeedy {} starting ---", env!("CARGO_PKG_VERSION")));
-    info("app", format!("exe={}", std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()));
-    info("app", format!(
-        "os={} arch={} family={} elevated={}",
-        crate::system_stats::os_name_for_log(),
-        std::env::consts::ARCH,
-        std::env::consts::FAMILY,
-        is_elevated()
-    ));
-    info("app", format!("webview2={}", webview2_version().unwrap_or_else(|| "NOT FOUND".to_string())));
+    info(
+        "app",
+        format!("--- OpenSpeedy {} starting ---", env!("CARGO_PKG_VERSION")),
+    );
+    info(
+        "app",
+        format!(
+            "exe={}",
+            std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ),
+    );
+    info(
+        "app",
+        format!(
+            "os={} arch={} family={} elevated={}",
+            os_name_for_log(),
+            std::env::consts::ARCH,
+            std::env::consts::FAMILY,
+            is_elevated()
+        ),
+    );
     info("app", format!("log={}", log_path_string()));
 }
 
@@ -381,7 +418,10 @@ mod tests {
         assert_eq!(one_line("first\nsecond\tthird"), "first second third");
         assert_eq!(one_line("  padded  "), "padded");
         // Backslashes in Windows paths survive — only whitespace is collapsed.
-        assert_eq!(one_line(r"C:\Program Files\OpenSpeedy"), r"C:\Program Files\OpenSpeedy");
+        assert_eq!(
+            one_line(r"C:\Program Files\OpenSpeedy"),
+            r"C:\Program Files\OpenSpeedy"
+        );
     }
 
     #[test]
@@ -403,7 +443,12 @@ mod tests {
         release_file();
 
         let path = log_path();
-        assert_eq!(path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()), Some(LOG_DIR_NAME));
+        assert_eq!(
+            path.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str()),
+            Some(LOG_DIR_NAME)
+        );
         assert_eq!(
             path.file_name().and_then(|n| n.to_str()),
             Some(file_name_for(&date_stamp()).as_str()),
@@ -419,7 +464,10 @@ mod tests {
         release_file();
 
         let second = std::fs::read_to_string(&path).expect("log file readable");
-        assert!(second.contains(&marker), "re-init truncated an existing log");
+        assert!(
+            second.contains(&marker),
+            "re-init truncated an existing log"
+        );
         assert!(second.contains("second-write"));
     }
 
@@ -439,11 +487,26 @@ mod tests {
 
         prune_old_files(&dir);
 
-        assert!(!dir.join(file_name_for(&day(1))).exists(), "oldest day should be deleted");
-        assert!(dir.join(file_name_for(&day(2))).exists(), "remaining days should survive");
-        assert!(dir.join(file_name_for(&day(KEEP_DAYS as u32 + 1))).exists(), "newest day should survive");
-        assert!(dir.join("openspeedy.log").exists(), "unrelated files must be left alone");
-        assert!(dir.join("bridge64.exe.log").exists(), "bridge logs must be left alone");
+        assert!(
+            !dir.join(file_name_for(&day(1))).exists(),
+            "oldest day should be deleted"
+        );
+        assert!(
+            dir.join(file_name_for(&day(2))).exists(),
+            "remaining days should survive"
+        );
+        assert!(
+            dir.join(file_name_for(&day(KEEP_DAYS as u32 + 1))).exists(),
+            "newest day should survive"
+        );
+        assert!(
+            dir.join("openspeedy.log").exists(),
+            "unrelated files must be left alone"
+        );
+        assert!(
+            dir.join("bridge64.exe.log").exists(),
+            "bridge logs must be left alone"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

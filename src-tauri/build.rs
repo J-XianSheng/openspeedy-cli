@@ -1,15 +1,23 @@
-//! Build script - compile 32/64-bit speedpatch DLLs and bridge EXEs via cmake
+//! Build script - compile 32/64-bit speedpatch DLLs and bridge EXEs.
+//!
+//! - speedpatch DLLs: CMake + MinHook (C++)
+//! - bridge EXEs: cargo build of the `src-bridge` crate (host arch + i686)
+//!
+//! Both are Windows-only native artifacts. When they cannot or should not be
+//! produced (non-Windows host, or a type-check pass), set
+//! `OPENSPEEDY_SKIP_NATIVE_BUILD=1` to skip the pipeline — the Rust code still
+//! type-checks against the Windows API surface.
 //!
 //! - Host arch: cmake crate auto-detects the compiler
 //! - Cross arch: cmake -A to target the other platform
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Build a cmake project (host arch) via the cmake crate, copy the output binary.
 fn build_cmake_crate(
-    manifest_dir: &PathBuf,
+    manifest_dir: &Path,
     profile: &str,
     project_dir: &str,    // relative to manifest_dir, e.g. "../speedpatch"
     bin_prefix: &str,     // e.g. "speedpatch" or "bridge"
@@ -36,8 +44,9 @@ fn build_cmake_crate(
 }
 
 /// Build a cmake project (cross arch) via cmake command line, copy the output binary.
+#[allow(clippy::too_many_arguments)]
 fn build_cmake_command(
-    manifest_dir: &PathBuf,
+    manifest_dir: &Path,
     profile: &str,
     project_dir: &str,       // relative to manifest_dir, e.g. "../speedpatch"
     cmake_arch: &str,         // "Win32" or "x64"
@@ -87,7 +96,7 @@ fn build_cmake_command(
 
 /// Build both architectures of a project.
 fn build_project(
-    manifest_dir: &PathBuf,
+    manifest_dir: &Path,
     profile: &str,
     target_arch: &str,
     project_dir: &str,
@@ -110,7 +119,7 @@ fn build_project(
 
 /// Build the Rust bridge crate via cargo for one target triple.
 /// Returns `(target_arch_name, built_exe_path)` on success.
-fn cargo_build_bridge(bridge_dir: &PathBuf, profile: &str, target: Option<&str>) -> Option<(String, PathBuf)> {
+fn cargo_build_bridge(bridge_dir: &Path, profile: &str, target: Option<&str>) -> Option<(String, PathBuf)> {
     let profile_flag = if profile == "release" { "--release" } else { "" };
     let build_type = if profile == "release" { "release" } else { "debug" };
 
@@ -138,7 +147,7 @@ fn cargo_build_bridge(bridge_dir: &PathBuf, profile: &str, target: Option<&str>)
 }
 
 /// Build Rust bridge for host arch (→ bridge64.exe) and optionally i686 (→ bridge32.exe).
-fn build_rust_bridge(manifest_dir: &PathBuf, profile: &str) {
+fn build_rust_bridge(manifest_dir: &Path, profile: &str) {
     let bridge_dir = manifest_dir.join("../src-bridge");
     let prof_dir = manifest_dir.join("target").join(profile);
 
@@ -169,12 +178,27 @@ fn build_rust_bridge(manifest_dir: &PathBuf, profile: &str) {
 
 fn main() {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+
+    // speedpatch DLLs and bridge EXEs are Windows native artifacts; nothing can
+    // (or should) be produced for other targets.
+    if target_os != "windows" {
+        println!("cargo:warning=target is not Windows — skipping speedpatch/bridge native build");
+        return;
+    }
+
+    // Escape hatch for type-checking the Rust side without the native toolchain
+    // (e.g. `OPENSPEEDY_SKIP_NATIVE_BUILD=1 cargo check --target x86_64-pc-windows-msvc`
+    // on a non-Windows host).
+    if env::var("OPENSPEEDY_SKIP_NATIVE_BUILD").is_ok() {
+        println!("cargo:warning=OPENSPEEDY_SKIP_NATIVE_BUILD is set — skipping speedpatch/bridge native build");
+        return;
+    }
 
     match target_arch.as_str() {
         "x86" | "x86_64" => {}
         _ => {
-            println!("cargo:warning=speedpatch/bridge only support x86/x86_64 Windows");
-            tauri_build::build();
+            println!("cargo:warning=speedpatch/bridge only support x86/x86_64 Windows — skipping native build");
             return;
         }
     }
@@ -189,25 +213,7 @@ fn main() {
     // --- bridge EXEs (Rust / cargo) ---
     build_rust_bridge(&manifest_dir, &profile);
 
-    println!("cargo:rustc-env=SPEEDPATCH_DLL_32=speedpatch32.dll");
-    println!("cargo:rustc-env=SPEEDPATCH_DLL_64=speedpatch64.dll");
-    println!("cargo:rustc-env=BRIDGE_EXE_64=bridge64.exe");
     println!("cargo:rerun-if-changed=../src-bridge/speedpatch/");
     println!("cargo:rerun-if-changed=../src-bridge/third_party/minhook/");
     println!("cargo:rerun-if-changed=../src-bridge/src/");
-
-    // Copy binaries to resources folder for Tauri bundling
-    let bin_dir = manifest_dir.join("binaries");
-    let _ = std::fs::create_dir_all(&bin_dir);
-    let prof_dir = manifest_dir.join("target").join(profile);
-    for name in &["speedpatch32.dll", "speedpatch64.dll", "bridge32.exe", "bridge64.exe"] {
-        let src = prof_dir.join(name);
-        if src.exists() {
-            let dst = bin_dir.join(name);
-            let _ = std::fs::copy(&src, &dst);
-            println!("cargo:info=  resource -> {}", dst.display());
-        }
-    }
-
-    tauri_build::build();
 }

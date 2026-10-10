@@ -1,31 +1,22 @@
 [package]
 name = "openspeedy"
 version = "3.3.16"
-description = "Open Source Game Speed Controller"
+description = "Open Source Game Speed Controller (CLI)"
 authors = ["Game1024"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Command-line only: no GUI, no WebView, no frontend build step.
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+# The `_lib` suffix is kept for the same reason as upstream — the lib name must
+# differ from the bin name on Windows, see rust-lang/cargo#8519.
 name = "openspeedy_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
 cmake = "0.1"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
-tauri-plugin-os = "2"
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-store = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows = { version = "0.58", features = [
@@ -35,19 +26,10 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemInformation",
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
-    "Win32_System_Registry",
+    "Win32_System_IO",
     "Win32_System_Console",
     "Win32_System_Threading",
-    "Win32_System_Pipes",
-    "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Shell",
-    "Win32_UI_Controls",
-    "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
 ] }
-base64 = "0.22"
-png = "0.17"
-hypomnesis = { version = "0.2", default-features = false, features = ["nvml", "dxgi", "pdh"] }
-
