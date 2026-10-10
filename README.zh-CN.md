@@ -94,13 +94,18 @@
 
 # 💾 安装
 
-本 fork 不提供编译好的二进制包，请从源码构建：
+## 下载（推荐）
+
+从 [GitHub Releases](https://github.com/J-XianSheng/openspeedy-cli/releases)
+下载最新的 `OpenSpeedy-<版本>-cli.zip`，解压后把 5 个文件放在同一目录。
+
+## 从源码构建
 
 ``` powershell
 cargo build --release
 ```
 
-构建会把全部运行时文件复制到 `src-tauri\target\release\`：
+两种方式得到的运行时文件相同（构建会复制到 `src-tauri\target\release\`）：
 
 | 文件 | 用途 |
 |------|------|
@@ -108,7 +113,7 @@ cargo build --release
 | `bridge64.exe` / `bridge32.exe` | 辅助进程（按需启动） |
 | `speedpatch64.dll` / `speedpatch32.dll` | 注入游戏的时间 API Hook DLL |
 
-把这 5 个文件拷到任意目录，运行 `openspeedy.exe help` 即可。
+把这 5 个文件放到任意目录，运行 `openspeedy.exe help` 即可。
 
 # 💻 操作系统要求
 - OS: Windows10 以上
@@ -122,24 +127,29 @@ cargo build --release
 # 1. 找到目标游戏进程（过滤词匹配 名称 / PID / 窗口标题）
 openspeedy list game
 
-# 2. 注入并启用变速（自动识别 32/64 位）
-openspeedy inject 1234
+# 2. 注入并启用变速 —— 支持 PID 或精确进程名（32/64 位自动识别）
+openspeedy inject 1234          # 或：openspeedy inject game.exe
 
 # 3. 设置速度倍率 —— 对所有已注入进程立即生效
-openspeedy speed 2
+openspeedy speed 2              # 2 为双倍速、0.5 为半速（范围 0.01 – 1000）
 ```
 
 | 命令 | 说明 |
 |------|------|
-| `list [过滤词] [-a]` | 列出进程 |
+| `list [过滤词] [-a]` | 列出进程（`-a` 含系统进程） |
 | `inject <PID\|名称>` | 注入并启用变速 |
 | `enable <PID\|名称>` / `disable <PID\|名称>` | 恢复 / 暂停变速 |
 | `speed <倍率>` | 设置倍率（0.01 – 1000） |
 | `status [PID\|名称]` | 查看当前倍率 / 注入状态 |
 | `stop` | 终止后台 bridge 进程 |
 
-倍率保存在 `%APPDATA%\OpenSpeedy\cli-state.json`，下次命令自动恢复（因此先
-`speed` 后 `inject` 也能直接生效）。完整帮助见 `openspeedy help`。
+注意事项：
+
+- **只有被注入的进程会变速** —— 想只加速某个游戏，就只 inject 它；倍率是全局值，会应用到所有已注入的进程。
+- `inject` / `enable` / `disable` / `status` 按进程名**精确匹配**（不区分大小写、`.exe` 可省，同名进程全部处理）；`list` 的过滤词是子串匹配 —— 先用 `list` 拿到准确名称。
+- 倍率保存在 `%APPDATA%\OpenSpeedy\cli-state.json`，下次命令自动恢复（因此先 `speed` 后 `inject` 也能直接生效）。
+- 游戏以管理员身份运行时，工具也需要用管理员终端运行，否则注入会被拒绝；失败时查看可执行文件同目录的 `bridge64.exe.log` / `bridge32.exe.log`。
+- 完整帮助见 `openspeedy help`。
 
 # 🔧 技术原理
 

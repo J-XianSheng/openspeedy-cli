@@ -94,13 +94,20 @@
 
 # 💾 Installation
 
-This fork is not distributed as a binary — build it from source:
+## Download (recommended)
+
+Grab the latest `OpenSpeedy-<version>-cli.zip` from
+[GitHub Releases](https://github.com/J-XianSheng/openspeedy-cli/releases),
+unzip it, and keep the five files together in one folder.
+
+## Build from source
 
 ``` powershell
 cargo build --release
 ```
 
-The build copies every runtime file into `src-tauri\target\release\`:
+Either way you end up with the same five runtime files (the build copies them
+into `src-tauri\target\release\`):
 
 | File | Role |
 |------|------|
@@ -108,7 +115,7 @@ The build copies every runtime file into `src-tauri\target\release\`:
 | `bridge64.exe` / `bridge32.exe` | helper processes, spawned on demand |
 | `speedpatch64.dll` / `speedpatch32.dll` | time-API hook DLLs, injected into the game |
 
-Copy those five files to any folder and run `openspeedy.exe help`.
+Put those five files in any folder and run `openspeedy.exe help`.
 
 # 💻 System Requirements
 - OS: Windows 10 or later
@@ -122,25 +129,36 @@ Copy those five files to any folder and run `openspeedy.exe help`.
 # 1. Find the target process (the filter matches name / PID / window title)
 openspeedy list game
 
-# 2. Inject and enable speed patching (32/64-bit is detected automatically)
-openspeedy inject 1234
+# 2. Inject and enable speed patching — accepts a PID or an exact process name
+#    (32/64-bit is detected automatically)
+openspeedy inject 1234          # or: openspeedy inject game.exe
 
 # 3. Set the speed multiplier — takes effect immediately on every injected process
-openspeedy speed 2
+openspeedy speed 2              # 2 = double speed, 0.5 = half speed (0.01 – 1000)
 ```
 
 | Command | Description |
 |---------|-------------|
-| `list [filter] [-a]` | List running processes |
+| `list [filter] [-a]` | List running processes (`-a` includes system processes) |
 | `inject <PID\|name>` | Inject + enable speed patching |
 | `enable <PID\|name>` / `disable <PID\|name>` | Resume / pause speed |
 | `speed <factor>` | Set the multiplier (0.01 – 1000) |
 | `status [PID\|name]` | Show current multiplier / injection state |
 | `stop` | Terminate background bridge processes |
 
-The multiplier is saved to `%APPDATA%\OpenSpeedy\cli-state.json` and restored
-automatically on the next command (so `speed` before `inject` also works).
-Run `openspeedy help` for the full help text.
+Notes:
+
+- **Only injected processes are affected** — to speed up one specific game,
+  inject just that game; the multiplier applies to every process you injected.
+- `inject` / `enable` / `disable` / `status` match the process name **exactly**
+  (case-insensitive, `.exe` optional; all processes with that name are handled),
+  while `list`'s filter is a substring match — get the exact name from `list` first.
+- The multiplier is saved to `%APPDATA%\OpenSpeedy\cli-state.json` and restored
+  automatically by the next command (so `speed` before `inject` also works).
+- If the game runs as administrator, launch the tool from an administrator
+  terminal as well; otherwise the injection is denied. On failure, check
+  `bridge64.exe.log` / `bridge32.exe.log` next to the executable.
+- Run `openspeedy help` for the full built-in help.
 
 # 🔧 How It Works
 
