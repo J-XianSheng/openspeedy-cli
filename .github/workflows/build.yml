@@ -1,15 +1,13 @@
 name: Build
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      portable-artifact-id: ${{ steps.upload-unsigned-portable.outputs.artifact-id }}
 
     steps:
       - name: Checkout
@@ -37,14 +35,27 @@ jobs:
       - name: Build (CLI)
         run: cargo build --release --manifest-path src-tauri/Cargo.toml
 
-      - name: Upload unsigned portable
-        id: upload-unsigned-portable
+      - name: Smoke test
+        working-directory: src-tauri/target/release
+        run: |
+          foreach ($f in 'openspeedy.exe', 'bridge32.exe', 'bridge64.exe', 'speedpatch32.dll', 'speedpatch64.dll') {
+            if (-not (Test-Path $f)) { throw "missing artifact: $f" }
+          }
+          .\openspeedy.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "openspeedy --help failed" }
+          .\openspeedy.exe version
+          if ($LASTEXITCODE -ne 0) { throw "openspeedy version failed" }
+          .\openspeedy.exe list
+          if ($LASTEXITCODE -ne 0) { throw "openspeedy list failed" }
+
+      - name: Upload portable
         uses: actions/upload-artifact@v4
         with:
-          name: OpenSpeedy-${{ steps.version.outputs.version }}-cli-unsigned
+          name: OpenSpeedy-${{ steps.version.outputs.version }}-cli
           path: |
             src-tauri/target/release/openspeedy.exe
             src-tauri/target/release/bridge32.exe
             src-tauri/target/release/bridge64.exe
             src-tauri/target/release/speedpatch32.dll
             src-tauri/target/release/speedpatch64.dll
+          if-no-files-found: error
